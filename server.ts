@@ -4,15 +4,22 @@ import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { PersistentVaultStore, RateLimiter } from "./server/vaultStore";
+import { sendVerificationCodeEmail } from "./server/emailService";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
+// Configure trust proxy for Google Cloud Run (single hop reverse proxy)
+// Cloud Run sits directly behind Google's frontend proxy. Setting 'trust proxy', 1
+// allows Express to securely derive req.ip and req.ips from the verified last hop
+// without allowing clients to spoof their IP by prepending arbitrary X-Forwarded-For headers.
+app.set("trust proxy", 1);
+
 app.use(express.json({ limit: "10mb" }));
 
-// Persistent vault and session store
+// Persistent vault and session store backed by Firestore
 const vaultStore = new PersistentVaultStore();
 
 // Rate Limiters to prevent quota exhaustion
@@ -21,17 +28,14 @@ const recheckLimiter = new RateLimiter(20, 5);  // 20 requests per 5 min
 const promptLabLimiter = new RateLimiter(30, 5); // 30 requests per 5 min
 const authLimiter = new RateLimiter(10, 5);      // 10 auth attempts per 5 min
 
-// Helper to extract client IP safely
+// Helper to extract client IP safely using Express's validated proxy chain
 function getClientIp(req: express.Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string") {
-    return forwarded.split(",")[0].trim();
-  }
-  return req.socket.remoteAddress || "127.0.0.1";
+  // req.ip uses the trusted proxy configuration (app.set('trust proxy', 1))
+  return req.ip || req.socket.remoteAddress || "127.0.0.1";
 }
 
 // Authentication Middleware: Enforces valid session token
-function authenticate(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function authenticate(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
@@ -40,7 +44,7 @@ function authenticate(req: express.Request, res: express.Response, next: express
   }
 
   const token = authHeader.substring(7).trim();
-  const sessionInfo = vaultStore.getSession(token);
+  const sessionInfo = await vaultStore.getSession(token);
 
   if (!sessionInfo.valid || !sessionInfo.session) {
     return res.status(401).json({
@@ -78,12 +82,13 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    hasResendKey: Boolean(process.env.RESEND_API_KEY),
     timestamp: new Date().toISOString(),
   });
 });
 
 // Authentication Endpoints
-app.post("/api/auth/request-code", (req, res) => {
+app.post("/api/auth/request-code", async (req, res) => {
   const ip = getClientIp(req);
   const rate = authLimiter.check(`req_code_${ip}`);
   if (!rate.allowed) {
@@ -98,18 +103,36 @@ app.post("/api/auth/request-code", (req, res) => {
     return res.status(400).json({ error: "A valid email address is required." });
   }
 
-  const { code, expiresAt } = vaultStore.createVerificationCode(email, name);
-  console.log(`[AUTH] Verification code generated for ${email}: ${code}`);
+  const { code, expiresAt } = await vaultStore.createVerificationCode(email, name);
 
-  return res.json({
+  // Send real email via Resend
+  const emailResult = await sendVerificationCodeEmail(email, code, name);
+
+  // In production, NEVER return the verification code in the API response.
+  // In development, devCode is provided only when explicitly in non-production.
+  const isDev = process.env.NODE_ENV !== "production";
+
+  const responsePayload: Record<string, any> = {
     success: true,
-    message: `Verification code sent to ${email}.`,
-    devCode: code, // Convenient preview code for instant verification
+    message: emailResult.sent
+      ? `Verification code sent to ${email}. Please check your inbox.`
+      : `Verification code generated. Please check your email inbox.`,
+    emailDelivery: {
+      provider: emailResult.provider,
+      sent: emailResult.sent,
+    },
     expiresAt: new Date(expiresAt).toISOString(),
-  });
+  };
+
+  if (isDev) {
+    // Local development convenience only - never exposed in production
+    responsePayload.devCode = code;
+  }
+
+  return res.json(responsePayload);
 });
 
-app.post("/api/auth/verify-code", (req, res) => {
+app.post("/api/auth/verify-code", async (req, res) => {
   const ip = getClientIp(req);
   const rate = authLimiter.check(`verify_${ip}`);
   if (!rate.allowed) {
@@ -124,7 +147,7 @@ app.post("/api/auth/verify-code", (req, res) => {
     return res.status(400).json({ error: "Email and verification code are required." });
   }
 
-  const result = vaultStore.verifyCode(email, code, name);
+  const result = await vaultStore.verifyCode(email, code, name);
   if (!result.success || !result.token) {
     return res.status(400).json({ error: result.error || "Failed to verify code." });
   }
@@ -136,9 +159,9 @@ app.post("/api/auth/verify-code", (req, res) => {
   });
 });
 
-app.post("/api/auth/logout", authenticate, (req, res) => {
+app.post("/api/auth/logout", authenticate, async (req, res) => {
   const currentSession = (req as any).session;
-  vaultStore.revokeSession(currentSession.token);
+  await vaultStore.revokeSession(currentSession.token);
   return res.json({ success: true, message: "Session signed out and token revoked." });
 });
 
@@ -153,7 +176,7 @@ app.get("/api/auth/me", authenticate, (req, res) => {
 });
 
 // Cloud Sync endpoints: SECURED by Bearer Session Token & User Ownership Check
-app.get("/api/sync/:userId", authenticate, (req, res) => {
+app.get("/api/sync/:userId", authenticate, async (req, res) => {
   const { userId } = req.params;
   const currentSession = (req as any).session;
 
@@ -164,11 +187,11 @@ app.get("/api/sync/:userId", authenticate, (req, res) => {
     });
   }
 
-  const decisions = vaultStore.getDecisions(userId);
+  const decisions = await vaultStore.getDecisions(userId);
   return res.json({ success: true, decisions, syncedAt: new Date().toISOString() });
 });
 
-app.post("/api/sync/:userId", authenticate, (req, res) => {
+app.post("/api/sync/:userId", authenticate, async (req, res) => {
   const { userId } = req.params;
   const currentSession = (req as any).session;
 
@@ -181,7 +204,7 @@ app.post("/api/sync/:userId", authenticate, (req, res) => {
 
   const { decisions } = req.body;
   if (Array.isArray(decisions)) {
-    vaultStore.saveDecisions(userId, decisions);
+    await vaultStore.saveDecisions(userId, decisions);
     return res.json({ success: true, count: decisions.length, syncedAt: new Date().toISOString() });
   }
   return res.status(400).json({ error: "Invalid decisions payload. Array required." });

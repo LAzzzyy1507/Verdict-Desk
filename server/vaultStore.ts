@@ -1,6 +1,12 @@
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
+import {
+  doc,
+  getDoc,
+  setDoc,
+  deleteDoc,
+  updateDoc
+} from 'firebase/firestore';
+import { getFirestoreDB } from './firebase';
 
 export interface StoredUser {
   id: string;
@@ -18,137 +24,92 @@ export interface StoredSession {
   expiresAt: string;
 }
 
-interface VerificationCodeEntry {
+export interface VerificationCodeEntry {
   email: string;
   name?: string;
   code: string;
   expiresAt: number;
 }
 
-interface VaultDataFile {
-  version: number;
-  users: Record<string, StoredUser>;
-  sessions: Record<string, StoredSession>;
-  vaults: Record<string, any[]>;
-}
-
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DATA_FILE = path.join(DATA_DIR, 'vault_store.json');
-
 export class PersistentVaultStore {
-  private users: Map<string, StoredUser> = new Map();
-  private sessions: Map<string, StoredSession> = new Map();
-  private vaults: Map<string, any[]> = new Map();
-  private pendingCodes: Map<string, VerificationCodeEntry> = new Map();
+  private inMemoryUsers: Map<string, StoredUser> = new Map();
+  private inMemorySessions: Map<string, StoredSession> = new Map();
+  private inMemoryVaults: Map<string, any[]> = new Map();
+  private inMemoryPendingCodes: Map<string, VerificationCodeEntry> = new Map();
 
-  constructor() {
-    this.ensureDir();
-    this.loadFromDisk();
-  }
-
-  private ensureDir() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-    } catch (err) {
-      console.error('Failed to create data directory:', err);
-    }
-  }
-
-  private loadFromDisk() {
-    try {
-      if (fs.existsSync(DATA_FILE)) {
-        const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-        const data: VaultDataFile = JSON.parse(raw);
-        if (data.users) {
-          for (const [id, u] of Object.entries(data.users)) {
-            this.users.set(id, u);
-          }
-        }
-        if (data.sessions) {
-          const now = Date.now();
-          for (const [token, s] of Object.entries(data.sessions)) {
-            // Only keep non-expired sessions
-            if (new Date(s.expiresAt).getTime() > now) {
-              this.sessions.set(token, s);
-            }
-          }
-        }
-        if (data.vaults) {
-          for (const [userId, items] of Object.entries(data.vaults)) {
-            this.vaults.set(userId, items);
-          }
-        }
-        console.log(
-          `[VaultStore] Loaded ${this.users.size} accounts, ${this.sessions.size} active sessions, ${this.vaults.size} vaults from disk.`
-        );
-      } else {
-        // Initialize empty file
-        this.saveToDisk();
-      }
-    } catch (err) {
-      console.error('[VaultStore] Error reading disk store, starting with clean state:', err);
-    }
-  }
-
-  private saveToDisk() {
-    try {
-      this.ensureDir();
-      const payload: VaultDataFile = {
-        version: 1,
-        users: Object.fromEntries(this.users.entries()),
-        sessions: Object.fromEntries(this.sessions.entries()),
-        vaults: Object.fromEntries(this.vaults.entries()),
-      };
-
-      const tmpFile = `${DATA_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, DATA_FILE);
-    } catch (err) {
-      console.error('[VaultStore] Failed to write vault to disk:', err);
-    }
-  }
-
-  // Generate deterministic unique userId from normalized email
+  // Deterministic unique userId from normalized email
   private getUserId(email: string): string {
     const normalized = email.trim().toLowerCase();
     const hash = crypto.createHash('sha256').update(normalized).digest('hex').substring(0, 12);
     return `usr_${hash}`;
   }
 
-  // Issue 6-digit verification code
-  public createVerificationCode(email: string, name?: string): { code: string; expiresAt: number } {
+  // Issue 6-digit verification code with 10-minute expiry
+  public async createVerificationCode(
+    email: string,
+    name?: string
+  ): Promise<{ code: string; expiresAt: number }> {
     const normalized = email.trim().toLowerCase();
     // 6-digit numeric OTP
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+    const expiresAt = Date.now() + 10 * 60 * 1000;
 
-    this.pendingCodes.set(normalized, {
+    const entry: VerificationCodeEntry = {
       email: normalized,
       name: name?.trim() || undefined,
       code,
       expiresAt,
-    });
+    };
+
+    // Cache locally
+    this.inMemoryPendingCodes.set(normalized, entry);
+
+    // Save to Firestore
+    try {
+      const db = getFirestoreDB();
+      const codeRef = doc(db, 'verification_codes', encodeURIComponent(normalized));
+      await setDoc(codeRef, entry);
+    } catch (err) {
+      console.warn('[VaultStore] Firestore write error for verification code, fell back to local cache:', err);
+    }
 
     return { code, expiresAt };
   }
 
   // Verify code and generate authenticated session token
-  public verifyCode(
+  public async verifyCode(
     email: string,
     submittedCode: string,
     name?: string
-  ): { success: boolean; token?: string; user?: StoredUser; error?: string } {
+  ): Promise<{ success: boolean; token?: string; user?: StoredUser; error?: string }> {
     const normalized = email.trim().toLowerCase();
-    const pending = this.pendingCodes.get(normalized);
+    let pending = this.inMemoryPendingCodes.get(normalized);
+
+    // Read from Firestore if not in local memory
+    if (!pending) {
+      try {
+        const db = getFirestoreDB();
+        const codeRef = doc(db, 'verification_codes', encodeURIComponent(normalized));
+        const snap = await getDoc(codeRef);
+        if (snap.exists()) {
+          pending = snap.data() as VerificationCodeEntry;
+          this.inMemoryPendingCodes.set(normalized, pending);
+        }
+      } catch (err) {
+        console.warn('[VaultStore] Firestore read error for verification code:', err);
+      }
+    }
 
     if (!pending) {
       return { success: false, error: 'No verification code was requested for this email. Please request a new code.' };
     }
 
     if (Date.now() > pending.expiresAt) {
-      this.pendingCodes.delete(normalized);
+      this.inMemoryPendingCodes.delete(normalized);
+      try {
+        const db = getFirestoreDB();
+        await deleteDoc(doc(db, 'verification_codes', encodeURIComponent(normalized)));
+      } catch {}
       return { success: false, error: 'Verification code has expired. Please request a new one.' };
     }
 
@@ -157,10 +118,14 @@ export class PersistentVaultStore {
     }
 
     // Code is valid! Consume code
-    this.pendingCodes.delete(normalized);
+    this.inMemoryPendingCodes.delete(normalized);
+    try {
+      const db = getFirestoreDB();
+      await deleteDoc(doc(db, 'verification_codes', encodeURIComponent(normalized)));
+    } catch {}
 
     const userId = this.getUserId(normalized);
-    let user = this.users.get(userId);
+    let user = await this.getUser(userId);
 
     if (!user) {
       const displayName = name?.trim() || pending.name || normalized.split('@')[0];
@@ -171,15 +136,15 @@ export class PersistentVaultStore {
         authProvider: 'email',
         createdAt: new Date().toISOString(),
       };
-      this.users.set(userId, user);
+      await this.saveUser(user);
     } else if (name && name.trim() && user.name !== name.trim()) {
       user.name = name.trim();
-      this.users.set(userId, user);
+      await this.saveUser(user);
     }
 
-    // Issue cryptographic 64-char hex session token
+    // Issue cryptographic 64-char hex session token (30 days validity)
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days session
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const session: StoredSession = {
       token,
@@ -189,47 +154,143 @@ export class PersistentVaultStore {
       expiresAt,
     };
 
-    this.sessions.set(token, session);
-    this.saveToDisk();
+    await this.saveSession(session);
 
     return { success: true, token, user };
   }
 
+  // Retrieve user by ID
+  public async getUser(userId: string): Promise<StoredUser | undefined> {
+    if (this.inMemoryUsers.has(userId)) {
+      return this.inMemoryUsers.get(userId);
+    }
+
+    try {
+      const db = getFirestoreDB();
+      const userRef = doc(db, 'users', userId);
+      const snap = await getDoc(userRef);
+      if (snap.exists()) {
+        const u = snap.data() as StoredUser;
+        this.inMemoryUsers.set(userId, u);
+        return u;
+      }
+    } catch (err) {
+      console.warn('[VaultStore] Error fetching user from Firestore:', err);
+    }
+
+    return undefined;
+  }
+
+  // Save or update user
+  public async saveUser(user: StoredUser): Promise<void> {
+    this.inMemoryUsers.set(user.id, user);
+
+    try {
+      const db = getFirestoreDB();
+      const userRef = doc(db, 'users', user.id);
+      await setDoc(userRef, user, { merge: true });
+    } catch (err) {
+      console.warn('[VaultStore] Error saving user to Firestore:', err);
+    }
+  }
+
+  // Save session
+  public async saveSession(session: StoredSession): Promise<void> {
+    this.inMemorySessions.set(session.token, session);
+
+    try {
+      const db = getFirestoreDB();
+      const sessionRef = doc(db, 'sessions', session.token);
+      await setDoc(sessionRef, session);
+    } catch (err) {
+      console.warn('[VaultStore] Error saving session to Firestore:', err);
+    }
+  }
+
   // Retrieve and validate session
-  public getSession(token: string): { valid: boolean; session?: StoredSession; user?: StoredUser } {
+  public async getSession(
+    token: string
+  ): Promise<{ valid: boolean; session?: StoredSession; user?: StoredUser }> {
     if (!token) return { valid: false };
-    const session = this.sessions.get(token);
+
+    let session = this.inMemorySessions.get(token);
+    if (!session) {
+      try {
+        const db = getFirestoreDB();
+        const sessionRef = doc(db, 'sessions', token);
+        const snap = await getDoc(sessionRef);
+        if (snap.exists()) {
+          session = snap.data() as StoredSession;
+          this.inMemorySessions.set(token, session);
+        }
+      } catch (err) {
+        console.warn('[VaultStore] Error fetching session from Firestore:', err);
+      }
+    }
+
     if (!session) return { valid: false };
 
     // Check expiry
     if (new Date(session.expiresAt).getTime() < Date.now()) {
-      this.sessions.delete(token);
-      this.saveToDisk();
+      await this.revokeSession(token);
       return { valid: false };
     }
 
-    const user = this.users.get(session.userId);
+    const user = await this.getUser(session.userId);
     return { valid: true, session, user };
   }
 
   // Revoke session on logout
-  public revokeSession(token: string): boolean {
-    if (this.sessions.has(token)) {
-      this.sessions.delete(token);
-      this.saveToDisk();
+  public async revokeSession(token: string): Promise<boolean> {
+    this.inMemorySessions.delete(token);
+
+    try {
+      const db = getFirestoreDB();
+      await deleteDoc(doc(db, 'sessions', token));
       return true;
+    } catch (err) {
+      console.warn('[VaultStore] Error deleting session from Firestore:', err);
+      return false;
     }
-    return false;
   }
 
   // Vault data isolation per userId
-  public getDecisions(userId: string): any[] {
-    return this.vaults.get(userId) || [];
+  public async getDecisions(userId: string): Promise<any[]> {
+    if (this.inMemoryVaults.has(userId)) {
+      return this.inMemoryVaults.get(userId) || [];
+    }
+
+    try {
+      const db = getFirestoreDB();
+      const vaultRef = doc(db, 'vaults', userId);
+      const snap = await getDoc(vaultRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        const decisions = Array.isArray(data.decisions) ? data.decisions : [];
+        this.inMemoryVaults.set(userId, decisions);
+        return decisions;
+      }
+    } catch (err) {
+      console.warn('[VaultStore] Error fetching vault from Firestore:', err);
+    }
+
+    return [];
   }
 
-  public saveDecisions(userId: string, decisions: any[]): void {
-    this.vaults.set(userId, decisions);
-    this.saveToDisk();
+  public async saveDecisions(userId: string, decisions: any[]): Promise<void> {
+    this.inMemoryVaults.set(userId, decisions);
+
+    try {
+      const db = getFirestoreDB();
+      const vaultRef = doc(db, 'vaults', userId);
+      await setDoc(vaultRef, {
+        userId,
+        decisions,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('[VaultStore] Error saving vault to Firestore:', err);
+    }
   }
 }
 

@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account profile and authentication details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "authProvider": { "type": "string", "enum": ["email", "apple"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "email", "name", "authProvider", "createdAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Authenticated user session bearer token",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "userId": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["token", "userId", "email", "createdAt", "expiresAt"]
+    },
+    "DecisionVault": {
+      "title": "DecisionVault",
+      "description": "User isolated decision records and briefs",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "decisions": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "decisions", "updatedAt"]
+    },
+    "VerificationCode": {
+      "title": "VerificationCode",
+      "description": "Pending one-time verification code for authentication",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["email", "code", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "entity": "User",
+      "description": "Stores user profiles keyed by unique user ID"
+    },
+    "/sessions/{token}": {
+      "entity": "Session",
+      "description": "Active session tokens keyed by token string"
+    },
+    "/vaults/{userId}": {
+      "entity": "DecisionVault",
+      "description": "User decision briefs stored with user isolation"
+    },
+    "/verification_codes/{email}": {
+      "entity": "VerificationCode",
+      "description": "Pending verification codes keyed by URL encoded email"
+    }
+  }
+}

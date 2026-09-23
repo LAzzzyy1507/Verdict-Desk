@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Verdict Desk collections
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    match /sessions/{token} {
+      allow read, write: if true;
+    }
+    match /vaults/{userId} {
+      allow read, write: if true;
+    }
+    match /verification_codes/{email} {
+      allow read, write: if true;
+    }
+  }
+}

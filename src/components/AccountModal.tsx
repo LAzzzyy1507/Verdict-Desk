@@ -62,8 +62,11 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         triggerHaptic('success');
         setCodeStep(true);
         setStatusNotice(data.message || `Verification code sent to ${cleanEmail}`);
-        if (data.devCode) {
+        // Dev preview code is strictly gated behind Vite's development mode
+        if (import.meta.env.DEV && data.devCode) {
           setDevPreviewCode(data.devCode);
+        } else {
+          setDevPreviewCode(null);
         }
       }
     } catch (err: any) {
@@ -127,12 +130,6 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       setCodeInput(devPreviewCode);
       triggerHaptic('light');
     }
-  };
-
-  const handleAppleRelayQuickFill = () => {
-    setEmailInput('analyst@verdictdesk.vault');
-    setNameInput('Verified Decision Analyst');
-    triggerHaptic('light');
   };
 
   return (
@@ -287,16 +284,6 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   />
                 </div>
 
-                <div className="pt-1 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={handleAppleRelayQuickFill}
-                    className="text-[11px] text-stone-500 hover:text-stone-800 dark:hover:text-stone-200 underline cursor-pointer"
-                  >
-                    Quick fill demo credentials
-                  </button>
-                </div>
-
                 <button
                   type="submit"
                   disabled={loading}
@@ -342,17 +329,17 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                   />
                 </div>
 
-                {devPreviewCode && (
+                {import.meta.env.DEV && devPreviewCode && (
                   <div
                     onClick={handleAutoFillCode}
                     className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 text-amber-900 dark:text-amber-200 text-xs flex items-center justify-between cursor-pointer hover:bg-amber-100/70 transition-colors"
                   >
                     <div className="flex items-center gap-2">
                       <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                      <span>Verification code: <strong className="font-mono font-bold">{devPreviewCode}</strong></span>
+                      <span>[DEV ONLY] Code: <strong className="font-mono font-bold">{devPreviewCode}</strong></span>
                     </div>
                     <span className="text-[10px] font-semibold uppercase tracking-wider bg-amber-200/60 dark:bg-amber-800/60 px-2 py-0.5 rounded-md">
-                      Tap to fill
+                      Auto-fill
                     </span>
                   </div>
                 )}
