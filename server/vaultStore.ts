@@ -1,11 +1,4 @@
 import crypto from 'crypto';
-import {
-  doc,
-  getDoc,
-  setDoc,
-  deleteDoc,
-  updateDoc
-} from 'firebase/firestore';
 import { getFirestoreDB } from './firebase';
 
 export interface StoredUser {
@@ -64,13 +57,12 @@ export class PersistentVaultStore {
     // Cache locally
     this.inMemoryPendingCodes.set(normalized, entry);
 
-    // Save to Firestore
+    // Save to Firestore via Admin SDK
     try {
       const db = getFirestoreDB();
-      const codeRef = doc(db, 'verification_codes', encodeURIComponent(normalized));
-      await setDoc(codeRef, entry);
+      await db.collection('verification_codes').doc(encodeURIComponent(normalized)).set(entry);
     } catch (err) {
-      console.warn('[VaultStore] Firestore write error for verification code, fell back to local cache:', err);
+      console.warn('[VaultStore] Firestore Admin write error for verification code, fell back to local cache:', err);
     }
 
     return { code, expiresAt };
@@ -85,18 +77,17 @@ export class PersistentVaultStore {
     const normalized = email.trim().toLowerCase();
     let pending = this.inMemoryPendingCodes.get(normalized);
 
-    // Read from Firestore if not in local memory
+    // Read from Firestore via Admin SDK if not in local memory
     if (!pending) {
       try {
         const db = getFirestoreDB();
-        const codeRef = doc(db, 'verification_codes', encodeURIComponent(normalized));
-        const snap = await getDoc(codeRef);
-        if (snap.exists()) {
-          pending = snap.data() as VerificationCodeEntry;
+        const docSnap = await db.collection('verification_codes').doc(encodeURIComponent(normalized)).get();
+        if (docSnap.exists) {
+          pending = docSnap.data() as VerificationCodeEntry;
           this.inMemoryPendingCodes.set(normalized, pending);
         }
       } catch (err) {
-        console.warn('[VaultStore] Firestore read error for verification code:', err);
+        console.warn('[VaultStore] Firestore Admin read error for verification code:', err);
       }
     }
 
@@ -108,7 +99,7 @@ export class PersistentVaultStore {
       this.inMemoryPendingCodes.delete(normalized);
       try {
         const db = getFirestoreDB();
-        await deleteDoc(doc(db, 'verification_codes', encodeURIComponent(normalized)));
+        await db.collection('verification_codes').doc(encodeURIComponent(normalized)).delete();
       } catch {}
       return { success: false, error: 'Verification code has expired. Please request a new one.' };
     }
@@ -121,7 +112,7 @@ export class PersistentVaultStore {
     this.inMemoryPendingCodes.delete(normalized);
     try {
       const db = getFirestoreDB();
-      await deleteDoc(doc(db, 'verification_codes', encodeURIComponent(normalized)));
+      await db.collection('verification_codes').doc(encodeURIComponent(normalized)).delete();
     } catch {}
 
     const userId = this.getUserId(normalized);
@@ -159,7 +150,7 @@ export class PersistentVaultStore {
     return { success: true, token, user };
   }
 
-  // Retrieve user by ID
+  // Retrieve user by ID via Admin SDK
   public async getUser(userId: string): Promise<StoredUser | undefined> {
     if (this.inMemoryUsers.has(userId)) {
       return this.inMemoryUsers.get(userId);
@@ -167,47 +158,44 @@ export class PersistentVaultStore {
 
     try {
       const db = getFirestoreDB();
-      const userRef = doc(db, 'users', userId);
-      const snap = await getDoc(userRef);
-      if (snap.exists()) {
-        const u = snap.data() as StoredUser;
+      const docSnap = await db.collection('users').doc(userId).get();
+      if (docSnap.exists) {
+        const u = docSnap.data() as StoredUser;
         this.inMemoryUsers.set(userId, u);
         return u;
       }
     } catch (err) {
-      console.warn('[VaultStore] Error fetching user from Firestore:', err);
+      console.warn('[VaultStore] Error fetching user from Firestore Admin:', err);
     }
 
     return undefined;
   }
 
-  // Save or update user
+  // Save or update user via Admin SDK
   public async saveUser(user: StoredUser): Promise<void> {
     this.inMemoryUsers.set(user.id, user);
 
     try {
       const db = getFirestoreDB();
-      const userRef = doc(db, 'users', user.id);
-      await setDoc(userRef, user, { merge: true });
+      await db.collection('users').doc(user.id).set(user, { merge: true });
     } catch (err) {
-      console.warn('[VaultStore] Error saving user to Firestore:', err);
+      console.warn('[VaultStore] Error saving user to Firestore Admin:', err);
     }
   }
 
-  // Save session
+  // Save session via Admin SDK
   public async saveSession(session: StoredSession): Promise<void> {
     this.inMemorySessions.set(session.token, session);
 
     try {
       const db = getFirestoreDB();
-      const sessionRef = doc(db, 'sessions', session.token);
-      await setDoc(sessionRef, session);
+      await db.collection('sessions').doc(session.token).set(session);
     } catch (err) {
-      console.warn('[VaultStore] Error saving session to Firestore:', err);
+      console.warn('[VaultStore] Error saving session to Firestore Admin:', err);
     }
   }
 
-  // Retrieve and validate session
+  // Retrieve and validate session via Admin SDK
   public async getSession(
     token: string
   ): Promise<{ valid: boolean; session?: StoredSession; user?: StoredUser }> {
@@ -217,14 +205,13 @@ export class PersistentVaultStore {
     if (!session) {
       try {
         const db = getFirestoreDB();
-        const sessionRef = doc(db, 'sessions', token);
-        const snap = await getDoc(sessionRef);
-        if (snap.exists()) {
-          session = snap.data() as StoredSession;
+        const docSnap = await db.collection('sessions').doc(token).get();
+        if (docSnap.exists) {
+          session = docSnap.data() as StoredSession;
           this.inMemorySessions.set(token, session);
         }
       } catch (err) {
-        console.warn('[VaultStore] Error fetching session from Firestore:', err);
+        console.warn('[VaultStore] Error fetching session from Firestore Admin:', err);
       }
     }
 
@@ -240,21 +227,41 @@ export class PersistentVaultStore {
     return { valid: true, session, user };
   }
 
-  // Revoke session on logout
+  // Revoke session on logout via Admin SDK
   public async revokeSession(token: string): Promise<boolean> {
     this.inMemorySessions.delete(token);
 
     try {
       const db = getFirestoreDB();
-      await deleteDoc(doc(db, 'sessions', token));
+      await db.collection('sessions').doc(token).delete();
       return true;
     } catch (err) {
-      console.warn('[VaultStore] Error deleting session from Firestore:', err);
+      console.warn('[VaultStore] Error deleting session from Firestore Admin:', err);
       return false;
     }
   }
 
-  // Vault data isolation per userId
+  // Clear all sessions (session rotation) via Admin SDK
+  public async clearAllSessions(): Promise<void> {
+    this.inMemorySessions.clear();
+
+    try {
+      const db = getFirestoreDB();
+      const snapshot = await db.collection('sessions').get();
+      if (!snapshot.empty) {
+        const batch = db.batch();
+        snapshot.docs.forEach((doc) => {
+          batch.delete(doc.ref);
+        });
+        await batch.commit();
+        console.log(`[VaultStore] Cleared ${snapshot.size} legacy session(s) in Firestore.`);
+      }
+    } catch (err) {
+      console.warn('[VaultStore] Error clearing sessions collection in Firestore Admin:', err);
+    }
+  }
+
+  // Vault data isolation per userId via Admin SDK
   public async getDecisions(userId: string): Promise<any[]> {
     if (this.inMemoryVaults.has(userId)) {
       return this.inMemoryVaults.get(userId) || [];
@@ -262,16 +269,15 @@ export class PersistentVaultStore {
 
     try {
       const db = getFirestoreDB();
-      const vaultRef = doc(db, 'vaults', userId);
-      const snap = await getDoc(vaultRef);
-      if (snap.exists()) {
-        const data = snap.data();
-        const decisions = Array.isArray(data.decisions) ? data.decisions : [];
+      const docSnap = await db.collection('vaults').doc(userId).get();
+      if (docSnap.exists) {
+        const data = docSnap.data();
+        const decisions = data && Array.isArray(data.decisions) ? data.decisions : [];
         this.inMemoryVaults.set(userId, decisions);
         return decisions;
       }
     } catch (err) {
-      console.warn('[VaultStore] Error fetching vault from Firestore:', err);
+      console.warn('[VaultStore] Error fetching vault from Firestore Admin:', err);
     }
 
     return [];
@@ -282,14 +288,13 @@ export class PersistentVaultStore {
 
     try {
       const db = getFirestoreDB();
-      const vaultRef = doc(db, 'vaults', userId);
-      await setDoc(vaultRef, {
+      await db.collection('vaults').doc(userId).set({
         userId,
         decisions,
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {
-      console.warn('[VaultStore] Error saving vault to Firestore:', err);
+      console.warn('[VaultStore] Error saving vault to Firestore Admin:', err);
     }
   }
 }

@@ -165,6 +165,16 @@ app.post("/api/auth/logout", authenticate, async (req, res) => {
   return res.json({ success: true, message: "Session signed out and token revoked." });
 });
 
+// Administrative session rotation: Invalidate all existing sessions after security lockdown
+app.post("/api/admin/rotate-sessions", async (req, res) => {
+  try {
+    await vaultStore.clearAllSessions();
+    return res.json({ success: true, message: "All sessions rotated and invalidated successfully." });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Failed to rotate sessions." });
+  }
+});
+
 app.get("/api/auth/me", authenticate, (req, res) => {
   return res.json({
     success: true,

@@ -1,9 +1,9 @@
-import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
+import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import path from 'path';
 
-let app: FirebaseApp | null = null;
+let app: App | null = null;
 let db: Firestore | null = null;
 
 export function getFirestoreDB(): Firestore {
@@ -19,23 +19,32 @@ export function getFirestoreDB(): Firestore {
     console.warn('[Firebase] Could not read firebase-applet-config.json:', err);
   }
 
-  const firebaseConfig = {
-    apiKey: config.apiKey || process.env.FIREBASE_API_KEY || '',
-    authDomain: config.authDomain || process.env.FIREBASE_AUTH_DOMAIN || '',
-    projectId: config.projectId || process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0602416583',
-    storageBucket: config.storageBucket || process.env.FIREBASE_STORAGE_BUCKET || '',
-    messagingSenderId: config.messagingSenderId || '',
-    appId: config.appId || '',
-  };
+  const databaseId =
+    process.env.FIRESTORE_DATABASE_ID ||
+    config.firestoreDatabaseId ||
+    'ai-studio-verdictdesk-e40523ec-cbd3-4155-aee4-721ba6ca9366';
 
-  app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  
-  const databaseId = config.firestoreDatabaseId || process.env.FIRESTORE_DATABASE_ID;
-  if (databaseId) {
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (serviceAccountJson) {
+    let serviceAccount: any;
+    try {
+      serviceAccount = JSON.parse(serviceAccountJson);
+    } catch (err: any) {
+      throw new Error(`Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ${err.message}`);
+    }
+
+    app = getApps().length > 0 ? getApps()[0] : initializeApp({ credential: cert(serviceAccount) });
     db = getFirestore(app, databaseId);
-  } else {
-    db = getFirestore(app);
+    return db;
   }
 
+  // If FIREBASE_SERVICE_ACCOUNT_JSON is not yet provided in Secrets, initialize with default project credentials
+  console.warn(
+    '[Firebase Admin] FIREBASE_SERVICE_ACCOUNT_JSON secret is not set. To bypass rules, add FIREBASE_SERVICE_ACCOUNT_JSON to Secrets.'
+  );
+
+  const projectId = process.env.FIREBASE_PROJECT_ID || config.projectId || 'gen-lang-client-0602416583';
+  app = getApps().length > 0 ? getApps()[0] : initializeApp({ projectId });
+  db = getFirestore(app, databaseId);
   return db;
 }
