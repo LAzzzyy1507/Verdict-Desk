@@ -82,6 +82,99 @@ export interface PromptLabData {
   variants: PromptVariant[];
 }
 
+export interface DebateSource {
+  title: string;
+  url: string;
+}
+
+export interface DebateFactCheckResult {
+  claim: string;
+  status: 'verified' | 'contradicted' | 'unsubstantiated' | 'nuanced';
+  explanation: string;
+  evidence: string;
+  sources: DebateSource[];
+}
+
+export interface DebateArgumentPoint {
+  point: string;
+  evidence: string;
+  statOrBenchmark?: string;
+}
+
+export interface DebateArgument {
+  speaker: 'sideA' | 'sideB';
+  speakerName: string;
+  roundNumber: number;
+  thesis: string;
+  corePoints: DebateArgumentPoint[];
+  fallacyWarning?: string;
+}
+
+export interface DebateRound {
+  roundNumber: number;
+  title: string;
+  sideAArgument: DebateArgument;
+  sideBArgument: DebateArgument;
+}
+
+export interface JudgeScorecard {
+  sideAScore: {
+    factualRigor: number; // 1-10
+    evidenceStrength: number; // 1-10
+    logicConsistency: number; // 1-10
+    total: number;
+  };
+  sideBScore: {
+    factualRigor: number; // 1-10
+    evidenceStrength: number; // 1-10
+    logicConsistency: number; // 1-10
+    total: number;
+  };
+  winner: 'sideA' | 'sideB' | 'stalemate';
+  winningOption: string;
+  keyDecidingFactor: string;
+  judgeSynthesis: string;
+  confidence: 'High' | 'Medium' | 'Low';
+}
+
+export interface DebateArenaSession {
+  id: string;
+  topic: string;
+  sideAName: string;
+  sideBName: string;
+  context?: string;
+  rounds: DebateRound[];
+  judgeScorecard: JudgeScorecard;
+  allSources: DebateSource[];
+  searchQueries: string[];
+  createdAt: string;
+}
+
+export interface UserVsAiMessage {
+  id: string;
+  sender: 'user' | 'ai';
+  text: string;
+  sources?: DebateSource[];
+  searchQueries?: string[];
+  vulnerabilityFlag?: string;
+  timestamp: string;
+}
+
+export interface UserVsAiDebateSession {
+  id: string;
+  topic: string;
+  userStance: string;
+  aiPersona: 'pragmatist' | 'devils_advocate' | 'skeptic';
+  messages: UserVsAiMessage[];
+  allSources: DebateSource[];
+  searchQueries?: string[];
+  judgeIntervention?: {
+    summary: string;
+    whoIsWinning: 'user' | 'ai' | 'even';
+    reason: string;
+  };
+}
+
 export interface UserAccount {
   id: string;
   email: string;
@@ -94,4 +187,4 @@ export interface UserAccount {
 
 export type DynamicTypeSize = 'small' | 'default' | 'large' | 'extra-large';
 
-export type ActiveTab = 'research' | 'history' | 'prompt_lab';
+export type ActiveTab = 'research' | 'debate' | 'history' | 'prompt_lab';
