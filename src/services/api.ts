@@ -1,4 +1,4 @@
-import { DecisionRecord, PromptLabData } from '../types';
+import { DecisionRecord, PromptLabData, DebateArenaSession, DebateFactCheckResult } from '../types';
 import { storageService } from './storage';
 
 export class OfflineException extends Error {
@@ -183,5 +183,88 @@ export const apiService = {
 
     const data = await response.json();
     return data.lab as PromptLabData;
+  },
+
+  async runDebateArena(params: {
+    topic: string;
+    sideAName?: string;
+    sideBName?: string;
+    context?: string;
+  }): Promise<DebateArenaSession> {
+    if (!this.checkNetwork()) {
+      throw new OfflineException();
+    }
+
+    const response = await fetch('/api/debate/arena', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      let msg = 'Debate Arena execution failed';
+      try {
+        const data = await response.json();
+        if (data.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    return data.debate as DebateArenaSession;
+  },
+
+  async sendDebateTurn(params: {
+    topic: string;
+    userStance?: string;
+    aiPersona: 'pragmatist' | 'devils_advocate' | 'skeptic';
+    userMessage: string;
+    history?: any[];
+  }): Promise<any> {
+    if (!this.checkNetwork()) {
+      throw new OfflineException();
+    }
+
+    const response = await fetch('/api/debate/turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      let msg = 'Failed to execute debate turn';
+      try {
+        const data = await response.json();
+        if (data.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    return data.turn;
+  },
+
+  async factCheckClaim(params: { claim: string; topic?: string }): Promise<DebateFactCheckResult> {
+    if (!this.checkNetwork()) {
+      throw new OfflineException();
+    }
+
+    const response = await fetch('/api/debate/fact-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      let msg = 'Failed to execute Google Search fact-check';
+      try {
+        const data = await response.json();
+        if (data.error) msg = data.error;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    return data.factCheck as DebateFactCheckResult;
   },
 };

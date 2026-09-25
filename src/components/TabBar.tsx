@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActiveTab } from '../types';
-import { Compass, Clock, Sparkles } from 'lucide-react';
+import { Compass, Swords, Clock, Sparkles } from 'lucide-react';
 import { triggerHaptic } from '../utils/haptics';
 
 interface TabBarProps {
@@ -19,6 +19,12 @@ export const TabBar: React.FC<TabBarProps> = ({
       id: 'research' as ActiveTab,
       label: 'Research',
       icon: Compass,
+      badge: null,
+    },
+    {
+      id: 'debate' as ActiveTab,
+      label: 'Debate',
+      icon: Swords,
       badge: null,
     },
     {

@@ -30,6 +30,7 @@ interface ResearchViewProps {
   onOpenShare: (decision: DecisionRecord) => void;
   isOffline: boolean;
   onStartNew: () => void;
+  onEnterDebate?: (topicData: { topic: string; sideA?: string; sideB?: string; context?: string }) => void;
 }
 
 export const ResearchView: React.FC<ResearchViewProps> = ({
@@ -38,6 +39,7 @@ export const ResearchView: React.FC<ResearchViewProps> = ({
   onOpenShare,
   isOffline,
   onStartNew,
+  onEnterDebate,
 }) => {
   const [question, setQuestion] = useState('');
   const [constraints, setConstraints] = useState('');
@@ -393,6 +395,19 @@ export const ResearchView: React.FC<ResearchViewProps> = ({
           <VerdictCard
             verdict={currentDecision.verdict}
             category={currentDecision.category}
+            onEnterDebate={
+              onEnterDebate
+                ? () => {
+                    const topOther = currentDecision.options.find((o) => !o.isWinner);
+                    onEnterDebate({
+                      topic: currentDecision.question,
+                      sideA: currentDecision.verdict.recommendedOption,
+                      sideB: topOther?.name || 'Top Competitor',
+                      context: currentDecision.constraints,
+                    });
+                  }
+                : undefined
+            }
           />
 
           {/* 2. Comparison Matrix (Stripped to deciding factors, winner marked) */}

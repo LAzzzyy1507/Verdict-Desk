@@ -11,6 +11,7 @@ import { TabBar } from './components/TabBar';
 import { ResearchView } from './components/ResearchView';
 import { HistoryView } from './components/HistoryView';
 import { PromptLabView } from './components/PromptLabView';
+import { DebateArenaView } from './components/DebateArenaView';
 import { ShareSheetModal } from './components/ShareSheetModal';
 import { AccountModal } from './components/AccountModal';
 import { DynamicTypeSlider } from './components/DynamicTypeSlider';
@@ -20,6 +21,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('research');
   const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
   const [currentDecision, setCurrentDecision] = useState<DecisionRecord | null>(null);
+  const [debateTopicData, setDebateTopicData] = useState<{
+    topic: string;
+    sideA?: string;
+    sideB?: string;
+    context?: string;
+  } | null>(null);
 
   // App Theme & Preferences
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -174,6 +181,16 @@ export default function App() {
     setActiveTab('research');
   };
 
+  const handleEnterDebate = (topicData: {
+    topic: string;
+    sideA?: string;
+    sideB?: string;
+    context?: string;
+  }) => {
+    setDebateTopicData(topicData);
+    setActiveTab('debate');
+  };
+
   return (
     <div className="min-h-screen bg-[#F8F8F7] dark:bg-[#0E0F12] text-stone-900 dark:text-stone-100 flex flex-col font-sf-sans selection:bg-orange-100 dark:selection:bg-orange-950 transition-colors">
       {/* Top Navigation & Status Bar */}
@@ -205,6 +222,16 @@ export default function App() {
             onOpenShare={(d) => setShareDecision(d)}
             isOffline={isOffline}
             onStartNew={handleStartNewDecision}
+            onEnterDebate={handleEnterDebate}
+          />
+        )}
+
+        {activeTab === 'debate' && (
+          <DebateArenaView
+            initialTopic={debateTopicData}
+            onSaveToVault={handleDecisionCreated}
+            isOffline={isOffline}
+            onNavigateTab={setActiveTab}
           />
         )}
 

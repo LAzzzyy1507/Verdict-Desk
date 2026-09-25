@@ -1,13 +1,14 @@
 import React from 'react';
 import { Verdict } from '../types';
-import { CheckCircle2, ShieldAlert, Sparkles } from 'lucide-react';
+import { CheckCircle2, ShieldAlert, Sparkles, Swords } from 'lucide-react';
 
 interface VerdictCardProps {
   verdict: Verdict;
   category?: string;
+  onEnterDebate?: () => void;
 }
 
-export const VerdictCard: React.FC<VerdictCardProps> = ({ verdict, category }) => {
+export const VerdictCard: React.FC<VerdictCardProps> = ({ verdict, category, onEnterDebate }) => {
   const getConfidenceBadge = (level: string) => {
     switch (level) {
       case 'High':
@@ -70,6 +71,20 @@ export const VerdictCard: React.FC<VerdictCardProps> = ({ verdict, category }) =
       <p className="mt-3.5 text-base md:text-lg leading-relaxed text-stone-800 dark:text-stone-200 font-sf-sans antialiased border-l-2 border-orange-600/40 dark:border-orange-500/40 pl-3.5">
         {verdict.reasoning}
       </p>
+
+      {/* Challenge in Debate Button */}
+      {onEnterDebate && (
+        <div className="mt-3.5">
+          <button
+            type="button"
+            onClick={onEnterDebate}
+            className="w-full py-2 px-3 rounded-xl bg-orange-600/10 hover:bg-orange-600/20 dark:bg-orange-950/40 dark:hover:bg-orange-900/60 text-orange-900 dark:text-orange-200 border border-orange-300 dark:border-orange-800/80 font-semibold text-xs flex items-center justify-center gap-2 transition-colors shadow-2xs"
+          >
+            <Swords className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" />
+            <span>Challenge this Verdict in the Debate Arena (Live Google Grounded)</span>
+          </button>
+        </div>
+      )}
 
       {/* Grounded Assurance Footer */}
       <div className="mt-4 pt-3 border-t border-orange-200/60 dark:border-orange-900/40 flex items-center justify-between text-xs text-stone-600 dark:text-stone-400">
